@@ -10,12 +10,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
+export const config = { api: { bodyParser: false } };
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = 'social-media-manager';
 
@@ -27,7 +22,7 @@ export default async function handler(request, response) {
 
   let client;
   try {
-    const form = formidable({});
+    const form = formidable({ multiples: true });
     const [fields, files] = await form.parse(request);
     
     // Extrai os dados do formulário
@@ -36,19 +31,17 @@ export default async function handler(request, response) {
     const scheduledPublishTime = fields.scheduled_publish_time?.[0];
     const userAccessToken = fields.userAccessToken?.[0];
     const accountsToPost = JSON.parse(fields.accounts?.[0] || '[]');
+    const imageFiles = files.files || [];
     
     // Faz o upload das imagens para o Cloudinary
     const uploadedImageUrls = await Promise.all(
-      (files.files || []).map(file => 
-        cloudinary.uploader.upload(file.filepath).then(result => result.secure_url)
-      )
+      imageFiles.map(file => cloudinary.uploader.upload(file.filepath).then(result => result.secure_url))
     );
 
     if (uploadedImageUrls.length === 0 && !text) {
-      return response.status(400).json({ error: 'É necessário ter um texto ou pelo menos uma imagem.' });
+      throw new Error('É necessário ter um texto ou pelo menos uma imagem.');
     }
     
-    // Conecta ao MongoDB se necessário
     if (MONGODB_URI) {
         client = new MongoClient(MONGODB_URI);
         await client.connect();
@@ -56,9 +49,7 @@ export default async function handler(request, response) {
     
     // Processa a publicação para cada conta selecionada
     const results = await Promise.all(
-        accountsToPost.map(account => 
-            publishToAccount(account, placements[account.id], text, uploadedImageUrls, scheduledPublishTime, userAccessToken, client)
-        )
+      accountsToPost.map(account => publishToAccount(account, placements[account.id], text, uploadedImageUrls, scheduledPublishTime, userAccessToken, client))
     );
 
     response.status(200).json({ status: 'sucesso', results });
@@ -71,46 +62,68 @@ export default async function handler(request, response) {
   }
 }
 
-// --- Funções Auxiliares de Publicação ---
-
+// --- Funções de Publicação ---
 async function publishToAccount(account, placements, text, imageUrls, scheduledTime, userAccessToken, dbClient) {
     const results = {};
     const unixTimestamp = scheduledTime ? Math.floor(new Date(scheduledTime).getTime() / 1000) : null;
     
-    // Publicação no Facebook
-    if (placements.facebook === 'feed') {
+    // --- Lógica para Facebook ---
+    const fbPlacement = placements.facebook;
+    if (fbPlacement) {
         try {
-            if (imageUrls.length === 0) { // Apenas texto
-                await apiPost(`${account.id}/feed`, { message: text, ...(unixTimestamp && { published: false, scheduled_publish_time: unixTimestamp }) }, account.accessToken);
-            } else if (imageUrls.length === 1) { // Foto única
-                await apiPost(`${account.id}/photos`, { caption: text, url: imageUrls[0], ...(unixTimestamp && { published: false, scheduled_publish_time: unixTimestamp }) }, account.accessToken);
-            } else { // Carrossel
-                const attachedMedia = await Promise.all(
-                    imageUrls.map(url => apiPost(`${account.id}/photos`, { url, published: false }, account.accessToken).then(res => ({ media_fbid: res.id })))
-                );
-                await apiPost(`${account.id}/feed`, { message: text, attached_media: attachedMedia, ...(unixTimestamp && { published: false, scheduled_publish_time: unixTimestamp }) }, account.accessToken);
+            switch(fbPlacement) {
+                case 'feed':
+                    if (imageUrls.length === 0) { // Apenas texto
+                        await apiPost(`${account.id}/feed`, { message: text, ...(unixTimestamp && { published: false, scheduled_publish_time: unixTimestamp }) }, account.accessToken);
+                    } else if (imageUrls.length === 1) { // Foto única
+                        await apiPost(`${account.id}/photos`, { caption: text, url: imageUrls[0], ...(unixTimestamp && { published: false, scheduled_publish_time: unixTimestamp }) }, account.accessToken);
+                    } else { // Carrossel
+                        const attachedMedia = await Promise.all(
+                            imageUrls.map(url => apiPost(`${account.id}/photos`, { url, published: false }, account.accessToken).then(res => ({ media_fbid: res.id })))
+                        );
+                        await apiPost(`${account.id}/feed`, { message: text, attached_media: attachedMedia, ...(unixTimestamp && { published: false, scheduled_publish_time: unixTimestamp }) }, account.accessToken);
+                    }
+                    break;
+                case 'story':
+                    // Para Stories, apenas uma imagem é permitida pela API
+                    if (imageUrls.length > 0) {
+                        await apiPost(`${account.id}/stories`, { page_photo_source: imageUrls[0] }, account.accessToken);
+                    }
+                    break;
             }
-            results.facebook = { success: true };
-        } catch (e) { results.facebook = { success: false, error: e.message }; }
+             results.facebook = { success: true, placement: fbPlacement };
+        } catch (e) { results.facebook = { success: false, error: e.message, placement: fbPlacement }; }
     }
 
-    // Publicação no Instagram
-    if (placements.instagram === 'feed' && account.instagram_business_account) {
-        const igUserId = account.instagram_business_account.id;
+    // --- Lógica para Instagram ---
+    const igPlacement = placements.instagram;
+    const igAccount = account.instagram_business_account;
+    if (igPlacement && igAccount) {
+        const igUserId = igAccount.id;
         try {
             let creationId;
-            if (imageUrls.length === 1) { // Foto única
-                const container = await apiPost(`${igUserId}/media`, { image_url: imageUrls[0], caption: text, ...(unixTimestamp && { scheduled_publish_time: unixTimestamp }) }, userAccessToken);
-                creationId = container.id;
-            } else if (imageUrls.length > 1) { // Carrossel
-                const itemContainers = await Promise.all(
-                    imageUrls.map(url => apiPost(`${igUserId}/media`, { image_url: url, is_carousel_item: true }, userAccessToken))
-                );
-                const carouselContainer = await apiPost(`${igUserId}/media`, { media_type: 'CAROUSEEL', caption: text, children: itemContainers.map(c => c.id), ...(unixTimestamp && { scheduled_publish_time: unixTimestamp }) }, userAccessToken);
-                creationId = carouselContainer.id;
+            switch(igPlacement) {
+                case 'feed':
+                     if (imageUrls.length === 1) { // Foto única
+                        const container = await apiPost(`${igUserId}/media`, { image_url: imageUrls[0], caption: text, ...(unixTimestamp && { scheduled_publish_time: unixTimestamp }) }, userAccessToken);
+                        creationId = container.id;
+                    } else if (imageUrls.length > 1) { // Carrossel
+                        const itemContainers = await Promise.all(
+                            imageUrls.map(url => apiPost(`${igUserId}/media`, { image_url: url, is_carousel_item: true }, userAccessToken))
+                        );
+                        const carouselContainer = await apiPost(`${igUserId}/media`, { media_type: 'CAROUSEL', caption: text, children: itemContainers.map(c => c.id), ...(unixTimestamp && { scheduled_publish_time: unixTimestamp }) }, userAccessToken);
+                        creationId = carouselContainer.id;
+                    }
+                    break;
+                case 'story':
+                     if (imageUrls.length > 0) {
+                         const container = await apiPost(`${igUserId}/media`, { image_url: imageUrls[0], media_type: 'STORIES' }, userAccessToken);
+                         creationId = container.id;
+                     }
+                    break;
             }
             
-            if (creationId && !unixTimestamp) { // Publica imediatamente se não for agendado
+            if (creationId && !unixTimestamp) { // Publica imediatamente
                 await apiPost(`${igUserId}/media_publish`, { creation_id: creationId }, userAccessToken);
             } else if (creationId && unixTimestamp && dbClient) {
                 // Salva o post agendado do Instagram no nosso DB
@@ -124,21 +137,28 @@ async function publishToAccount(account, placements, text, imageUrls, scheduledT
                     status: 'SCHEDULED'
                 });
             }
-            results.instagram = { success: true };
-        } catch (e) { results.instagram = { success: false, error: e.message }; }
+            results.instagram = { success: true, placement: igPlacement };
+        } catch (e) { results.instagram = { success: false, error: e.message, placement: igPlacement }; }
     }
-
     return { accountName: account.name, ...results };
 }
 
 // Helper para chamadas à API da Meta
 async function apiPost(endpoint, params, token) {
-  const usp = new URLSearchParams(params);
+  const usp = new URLSearchParams();
+  for (const key in params) {
+      if (Array.isArray(params[key])) {
+          usp.append(key, JSON.stringify(params[key]));
+      } else {
+          usp.append(key, params[key]);
+      }
+  }
+  
   const response = await fetch(`https://graph.facebook.com/v23.0/${endpoint}?access_token=${token}`, {
     method: 'POST',
     body: usp,
   });
   const data = await response.json();
-  if (data.error) throw new Error(data.error.message);
+  if (data.error) throw new Error(`(${data.error.code}) ${data.error.message}`);
   return data;
 }
