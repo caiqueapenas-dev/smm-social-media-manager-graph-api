@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash, FaEdit, FaCheck, FaArrowLeft } from 'react-icons/fa6';
+import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash, FaEdit, FaCheck, FaArrowLeft } from 'react-icons/fa';
 import Cropper from 'react-easy-crop';
 
 // --- Constantes da API ---
