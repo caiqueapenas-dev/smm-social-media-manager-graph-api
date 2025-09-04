@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash, FaEdit, FaCheck, FaArrowLeft } from 'react-icons/fa';
+import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash, FaEdit, FaCheck, FaArrowLeft } from 'react-icons/fa6';
 import Cropper from 'react-easy-crop';
 
 // --- Constantes da API ---
@@ -223,14 +223,14 @@ export default function App() {
                 </div>
             )}
             
-            {isPublisherOpen && <PostPublisher accounts={accounts} onClose={() => setIsPublisherOpen(false)} onPublishSuccess={fetchPostsAndAccounts} />}
+            {isPublisherOpen && <PostPublisher accounts={accounts} userAccessToken={accessToken} onClose={() => setIsPublisherOpen(false)} onPublishSuccess={fetchPostsAndAccounts} />}
             {modalPostGroup && <PostModal postGroup={modalPostGroup} onClose={() => setModalPostGroup(null)} />}
         </div>
     );
 }
 
 // --- Componente PostPublisher ---
-const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
+const PostPublisher = ({ accounts, userAccessToken, onClose, onPublishSuccess }) => {
     const [selectedClients, setSelectedClients] = useState(new Set());
     const [placements, setPlacements] = useState({});
     const [text, setText] = useState('');
@@ -260,19 +260,24 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
         setScheduleTime(localTime);
     }, []);
 
-    useEffect(() => {
+    const validateScheduleTime = useCallback(() => {
         if (!isScheduling || !scheduleDate || !scheduleTime) {
             setScheduleWarning('');
-            return;
+            return true;
         }
         const scheduleDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
         const minDate = new Date(new Date().getTime() + 20 * 60000); // Agora + 20 minutos
         if (scheduleDateTime < minDate) {
             setScheduleWarning('Agendamento deve ser no mínimo 20 minutos no futuro.');
-        } else {
-            setScheduleWarning('');
+            return false;
         }
+        setScheduleWarning('');
+        return true;
     }, [scheduleDate, scheduleTime, isScheduling]);
+
+    useEffect(() => {
+        validateScheduleTime();
+    }, [validateScheduleTime]);
 
     const handleFileDrop = (e) => {
         e.preventDefault();
@@ -338,16 +343,25 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
     
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (selectedClients.size === 0 || (!text && files.length === 0) || (isScheduling && scheduleWarning)) {
-            setSubmitStatus({ message: 'Verifique os campos obrigatórios e avisos.', type: 'error' });
+        if (isScheduling && !validateScheduleTime()) {
+             setSubmitStatus({ message: 'Verifique a data e hora do agendamento.', type: 'error' });
+             return;
+        }
+        if (selectedClients.size === 0 || (!text && files.length === 0)) {
+            setSubmitStatus({ message: 'Selecione um cliente e adicione conteúdo.', type: 'error' });
             return;
         }
         setIsSubmitting(true);
         setSubmitStatus({ message: '', type: '' });
 
         const formData = new FormData();
+        const accountsToPost = accounts.filter(acc => selectedClients.has(acc.id));
+        
         formData.append('text', text);
         formData.append('placements', JSON.stringify(placements));
+        formData.append('accounts', JSON.stringify(accountsToPost));
+        formData.append('userAccessToken', userAccessToken);
+
         if (isScheduling) {
             formData.append('scheduled_publish_time', new Date(`${scheduleDate}T${scheduleTime}`).toISOString());
         }
@@ -423,10 +437,10 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">3. Mídias (até 10 imagens)</label>
-                                <label onDrop={handleFileDrop} onDragOver={(e) => e.preventDefault()} className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-indigo-500 block">
+                                <label className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-indigo-500 block">
+                                    <input ref={fileInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleFileDrop({ preventDefault: () => {}, dataTransfer: { files: e.target.files } })} />
                                     <FaImage className="mx-auto h-10 w-10 text-gray-400" />
                                     <p className="mt-2 text-sm text-gray-600">Arraste e solte ou clique aqui para selecionar</p>
-                                    <input ref={fileInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleFileDrop({ preventDefault: () => {}, dataTransfer: { files: e.target.files } })} />
                                 </label>
                                 <div className="mt-4 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
                                     {files.map((fileObj, index) => (
@@ -508,6 +522,7 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
     );
 };
 
+// --- Componentes Aninhados (Visualização do Calendário)
 const CalendarHeader = ({ currentDate, view, onDateChange, onViewChange, onToday }) => {
     const headerText = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
     return (
