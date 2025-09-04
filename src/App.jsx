@@ -1,11 +1,44 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash } from 'react-icons/fa';
-
-
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash, FaEdit, FaCheck, FaArrowLeft } from 'react-icons/fa6';
+import Cropper from 'react-easy-crop';
 
 // --- Constantes da API ---
 const API_VERSION = 'v23.0';
 const BASE_URL = `https://graph.facebook.com/${API_VERSION}`;
+
+// Função auxiliar para cortar a imagem
+const getCroppedImg = (imageSrc, pixelCrop) => {
+  const image = new Image();
+  image.src = imageSrc;
+  const canvas = document.createElement('canvas');
+  canvas.width = pixelCrop.width;
+  canvas.height = pixelCrop.height;
+  const ctx = canvas.getContext('2d');
+
+  ctx.drawImage(
+    image,
+    pixelCrop.x,
+    pixelCrop.y,
+    pixelCrop.width,
+    pixelCrop.height,
+    0,
+    0,
+    pixelCrop.width,
+    pixelCrop.height
+  );
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        console.error('Canvas is empty');
+        return reject(new Error('Canvas is empty'));
+      }
+      blob.name = `cropped-${Date.now()}.jpeg`;
+      resolve(blob);
+    }, 'image/jpeg');
+  });
+};
+
 
 // --- Componente Principal App ---
 export default function App() {
@@ -198,7 +231,8 @@ export default function App() {
 
 // --- Componente PostPublisher ---
 const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
-    const [selectedProfiles, setSelectedProfiles] = useState(new Set());
+    const [selectedClients, setSelectedClients] = useState(new Set());
+    const [placements, setPlacements] = useState({});
     const [text, setText] = useState('');
     const [files, setFiles] = useState([]);
     const [isScheduling, setIsScheduling] = useState(false);
@@ -209,22 +243,34 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
     const [submitStatus, setSubmitStatus] = useState({ message: '', type: '' });
     const dragItem = React.useRef(null);
     const dragOverItem = React.useRef(null);
+    const fileInputRef = useRef(null);
+
+    // Estado para o Cropper
+    const [croppingFile, setCroppingFile] = useState(null); // { id, url, file }
+    const [crop, setCrop] = useState({ x: 0, y: 0 });
+    const [zoom, setZoom] = useState(1);
+    const [aspect, setAspect] = useState(1 / 1);
+    const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
 
     useEffect(() => {
-        if (!isScheduling) {
+        const now = new Date();
+        const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+        const localTime = now.toTimeString().slice(0, 5);
+        setScheduleDate(localDate);
+        setScheduleTime(localTime);
+    }, []);
+
+    useEffect(() => {
+        if (!isScheduling || !scheduleDate || !scheduleTime) {
             setScheduleWarning('');
             return;
         }
-        if (scheduleDate && scheduleTime) {
-            const scheduleDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
-            const now = new Date();
-            const minDate = new Date(now.getTime() + 20 * 60000); // Agora + 20 minutos
-            const maxDate = new Date(now.getTime() + 29 * 24 * 60 * 60000); // Agora + 29 dias
-            if (scheduleDateTime < minDate || scheduleDateTime > maxDate) {
-                setScheduleWarning('A data de agendamento deve ser entre 20 minutos e 29 dias a partir de agora.');
-            } else {
-                setScheduleWarning('');
-            }
+        const scheduleDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
+        const minDate = new Date(new Date().getTime() + 20 * 60000); // Agora + 20 minutos
+        if (scheduleDateTime < minDate) {
+            setScheduleWarning('Agendamento deve ser no mínimo 20 minutos no futuro.');
+        } else {
+            setScheduleWarning('');
         }
     }, [scheduleDate, scheduleTime, isScheduling]);
 
@@ -235,9 +281,9 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
             alert('Você pode adicionar no máximo 10 imagens.');
             return;
         }
-        setFiles(prev => [...prev, ...droppedFiles.map(file => ({ file, id: Math.random() }))]);
+        setFiles(prev => [...prev, ...droppedFiles.map(file => ({ file, id: Math.random(), url: URL.createObjectURL(file) }))]);
     };
-
+    
     const removeFile = (id) => setFiles(prev => prev.filter(f => f.id !== id));
 
     const handleSort = () => {
@@ -249,51 +295,105 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
         setFiles(_files);
     };
 
-    const handleProfileSelection = (profileId) => {
-        setSelectedProfiles(prev => {
-            const newSet = new Set(prev);
-            if (newSet.has(profileId)) newSet.delete(profileId);
-            else newSet.add(profileId);
-            return newSet;
-        });
+    const handleClientSelection = (accountId) => {
+        const newSelection = new Set(selectedClients);
+        const newPlacements = { ...placements };
+        if (newSelection.has(accountId)) {
+            newSelection.delete(accountId);
+            delete newPlacements[accountId];
+        } else {
+            newSelection.add(accountId);
+            newPlacements[accountId] = { facebook: 'feed', instagram: 'feed' };
+        }
+        setSelectedClients(newSelection);
+        setPlacements(newPlacements);
     };
 
+    const handlePlacementChange = (accountId, platform, placement) => {
+        setPlacements(prev => ({
+            ...prev,
+            [accountId]: {
+                ...prev[accountId],
+                [platform]: placement,
+            }
+        }));
+    };
+    
+    const onCropComplete = (croppedArea, croppedAreaPixels) => {
+        setCroppedAreaPixels(croppedAreaPixels);
+    };
+
+    const applyCrop = async () => {
+        if (!croppedAreaPixels || !croppingFile) return;
+        try {
+            const croppedBlob = await getCroppedImg(croppingFile.url, croppedAreaPixels);
+            const croppedFile = new File([croppedBlob], croppingFile.file.name, { type: 'image/jpeg' });
+            
+            setFiles(files.map(f => f.id === croppingFile.id ? { ...f, file: croppedFile, url: URL.createObjectURL(croppedFile) } : f));
+            setCroppingFile(null);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+    
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (selectedProfiles.size === 0 || (!text && files.length === 0) || (isScheduling && scheduleWarning)) {
-            setSubmitStatus({ message: 'Por favor, preencha os campos obrigatórios e corrija os avisos.', type: 'error' });
+        if (selectedClients.size === 0 || (!text && files.length === 0) || (isScheduling && scheduleWarning)) {
+            setSubmitStatus({ message: 'Verifique os campos obrigatórios e avisos.', type: 'error' });
             return;
         }
-
         setIsSubmitting(true);
         setSubmitStatus({ message: '', type: '' });
 
         const formData = new FormData();
         formData.append('text', text);
-        formData.append('platforms', JSON.stringify(Array.from(selectedProfiles)));
-        if (isScheduling && scheduleDate && scheduleTime) {
+        formData.append('placements', JSON.stringify(placements));
+        if (isScheduling) {
             formData.append('scheduled_publish_time', new Date(`${scheduleDate}T${scheduleTime}`).toISOString());
         }
         files.forEach(fileObj => formData.append('files', fileObj.file));
 
         try {
-            const response = await fetch('/api/publish', {
-                method: 'POST',
-                body: formData,
-            });
+            const response = await fetch('/api/publish', { method: 'POST', body: formData });
             const result = await response.json();
-            if (!response.ok) throw new Error(result.error || 'Erro desconhecido no servidor.');
+            if (!response.ok) throw new Error(result.error || 'Erro desconhecido.');
             setSubmitStatus({ message: 'Publicação enviada com sucesso!', type: 'success' });
             setTimeout(() => {
                 onClose();
                 onPublishSuccess();
             }, 1500);
         } catch (error) {
-            setSubmitStatus({ message: error.message, type: 'error' });
+            setSubmitStatus({ message: `Falha no envio: ${error.message}`, type: 'error' });
         } finally {
             setIsSubmitting(false);
         }
     };
+
+    if (croppingFile) {
+        return (
+            <div className="fixed inset-0 bg-black/80 z-50 flex flex-col p-4" onClick={() => setCroppingFile(null)}>
+                <div className="relative w-full h-full max-w-4xl max-h-[80vh] mx-auto" onClick={e => e.stopPropagation()}>
+                    <Cropper
+                        image={croppingFile.url}
+                        crop={crop}
+                        zoom={zoom}
+                        aspect={aspect}
+                        onCropChange={setCrop}
+                        onZoomChange={setZoom}
+                        onCropComplete={onCropComplete}
+                    />
+                </div>
+                <div className="flex-shrink-0 p-4 bg-gray-800 flex items-center justify-center gap-6" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => setCroppingFile(null)} className="flex items-center gap-2 text-white"><FaArrowLeft /> Voltar</button>
+                    <div className="flex gap-2">
+                        <button onClick={() => setAspect(1 / 1)} className={`px-3 py-1 rounded text-sm ${aspect === 1/1 ? 'bg-indigo-500 text-white' : 'bg-gray-600 text-gray-200'}`}>Quadrado (1:1)</button>
+                        <button onClick={() => setAspect(4 / 5)} className={`px-3 py-1 rounded text-sm ${aspect === 4/5 ? 'bg-indigo-500 text-white' : 'bg-gray-600 text-gray-200'}`}>Vertical (4:5)</button>
+                    </div>
+                    <button onClick={applyCrop} className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"><FaCheck /> Aplicar Corte</button>
+                </div>
+            </div>
+        )
+    }
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex justify-center items-center p-4 animate-fade-in" onClick={onClose}>
@@ -304,44 +404,36 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
                 </div>
                 <form onSubmit={handleSubmit} className="flex-grow contents">
                     <div className="flex-grow p-6 grid grid-cols-1 md:grid-cols-2 gap-6 overflow-y-auto">
-                        <div className="space-y-6">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">1. Selecione os perfis</label>
+                        <div className="space-y-4">
+                             <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">1. Selecione os clientes</label>
                                 <div className="p-2 border rounded-md max-h-40 overflow-y-auto space-y-2">
-                                    {accounts.map(acc => {
-                                        const fbProfile = { id: acc.id, name: acc.name, type: 'facebook', picture: acc.picture?.data?.url };
-                                        const igProfile = acc.instagram_business_account ? { id: acc.instagram_business_account.id, name: `@${acc.instagram_business_account.username}`, type: 'instagram', picture: acc.picture?.data?.url } : null;
-                                        return (
-                                            <React.Fragment key={acc.id}>
-                                                {[fbProfile, igProfile].map(profile => profile && (
-                                                    <label key={profile.id} className="flex items-center p-2 rounded hover:bg-gray-100 cursor-pointer">
-                                                        <input type="checkbox" onChange={() => handleProfileSelection(JSON.stringify(profile))} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
-                                                        <img src={profile.picture} className="h-6 w-6 rounded-full mx-2" />
-                                                        <span className="text-sm">{profile.name}</span>
-                                                        {profile.type === 'facebook' ? <FaFacebook className="ml-auto text-blue-600" /> : <FaInstagram className="ml-auto text-pink-600" />}
-                                                    </label>
-                                                ))}
-                                            </React.Fragment>
-                                        );
-                                    })}
+                                    {accounts.map(acc => (
+                                        <label key={acc.id} className="flex items-center p-2 rounded hover:bg-gray-100 cursor-pointer">
+                                            <input type="checkbox" onChange={() => handleClientSelection(acc.id)} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                                            <img src={acc.picture?.data?.url} className="h-6 w-6 rounded-full mx-2" />
+                                            <span className="text-sm">{acc.name}</span>
+                                        </label>
+                                    ))}
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">2. Texto do post</label>
-                                <textarea value={text} onChange={(e) => setText(e.target.value)} rows="8" className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500" placeholder="Digite a legenda aqui..."></textarea>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">2. Legenda</label>
+                                <textarea value={text} onChange={(e) => setText(e.target.value)} rows="6" className="w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500" placeholder="Digite a legenda aqui..."></textarea>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">3. Mídias (até 10 imagens)</label>
-                                <div onDrop={handleFileDrop} onDragOver={(e) => e.preventDefault()} className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-indigo-500">
+                                <label onDrop={handleFileDrop} onDragOver={(e) => e.preventDefault()} className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-indigo-500 block">
                                     <FaImage className="mx-auto h-10 w-10 text-gray-400" />
-                                    <p className="mt-2 text-sm text-gray-600">Arraste e solte as imagens aqui</p>
-                                    <input type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleFileDrop({ preventDefault: () => {}, dataTransfer: { files: e.target.files } })} />
-                                </div>
+                                    <p className="mt-2 text-sm text-gray-600">Arraste e solte ou clique aqui para selecionar</p>
+                                    <input ref={fileInputRef} type="file" multiple accept="image/*" className="hidden" onChange={(e) => handleFileDrop({ preventDefault: () => {}, dataTransfer: { files: e.target.files } })} />
+                                </label>
                                 <div className="mt-4 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
                                     {files.map((fileObj, index) => (
                                         <div key={fileObj.id} draggable onDragStart={() => dragItem.current = index} onDragEnter={() => dragOverItem.current = index} onDragEnd={handleSort} onDragOver={(e) => e.preventDefault()} className="relative group aspect-square cursor-grab">
                                             <span className="absolute top-1 left-1 z-10 bg-black/60 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">{index + 1}</span>
-                                            <img src={URL.createObjectURL(fileObj.file)} className="h-full w-full object-cover rounded" />
+                                            <img src={fileObj.url} className="h-full w-full object-cover rounded" />
+                                            <button type="button" onClick={() => setCroppingFile(fileObj)} className="absolute bottom-1 right-1 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><FaEdit size={12} /></button>
                                             <button type="button" onClick={() => removeFile(fileObj.id)} className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><FaTrash size={12} /></button>
                                         </div>
                                     ))}
@@ -349,30 +441,55 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
                             </div>
                         </div>
                         <div className="bg-white p-4 rounded-md border flex flex-col">
-                            <h3 className="text-lg font-semibold mb-4 text-center">Configurações e Preview</h3>
-                            <div className="mb-6">
-                                <label className="flex items-center space-x-2">
-                                    <input type="checkbox" checked={isScheduling} onChange={() => setIsScheduling(!isScheduling)} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
-                                    <span className="text-sm font-medium">Agendar publicação</span>
-                                </label>
-                                {isScheduling && (
-                                    <div className="mt-2 grid grid-cols-2 gap-4 animate-fade-in">
-                                        <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="p-2 border border-gray-300 rounded-md" />
-                                        <input type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} className="p-2 border border-gray-300 rounded-md" />
-                                        {scheduleWarning && <p className="col-span-2 text-xs text-red-600">{scheduleWarning}</p>}
-                                    </div>
-                                )}
-                            </div>
-                            <div className="flex-grow w-full max-w-sm mx-auto bg-gray-100 p-2 rounded-lg">
-                                <div className="flex items-center mb-2">
-                                    <div className="h-8 w-8 rounded-full bg-gray-300"></div>
-                                    <div className="ml-2 h-4 w-24 bg-gray-300 rounded"></div>
-                                </div>
-                                <div className="w-full h-64 bg-gray-300 rounded-md flex items-center justify-center">
-                                    {files.length > 0 ? <img src={URL.createObjectURL(files[0].file)} className="max-h-full max-w-full" /> : <FaImage className="h-16 w-16 text-gray-400" />}
-                                </div>
-                                <p className="mt-2 text-sm text-gray-700 p-2 whitespace-pre-wrap">{text || "Sua legenda aparecerá aqui..."}</p>
-                            </div>
+                            <h3 className="text-lg font-semibold mb-2 text-center">4. Configurações e Preview</h3>
+                             <div className="space-y-4 overflow-y-auto">
+                                 {Array.from(selectedClients).map(clientId => {
+                                     const acc = accounts.find(a => a.id === clientId);
+                                     return (
+                                        <div key={clientId} className="p-3 border rounded-md">
+                                            <div className="flex items-center mb-3">
+                                                <img src={acc.picture?.data?.url} className="h-8 w-8 rounded-full mr-2"/>
+                                                <span className="font-semibold">{acc.name}</span>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                {/* Config Facebook */}
+                                                <div className="space-y-2">
+                                                    <div className="flex items-center gap-2"><FaFacebook className="text-blue-600"/><span>Facebook</span></div>
+                                                    <select value={placements[clientId]?.facebook} onChange={(e) => handlePlacementChange(clientId, 'facebook', e.target.value)} className="w-full text-sm p-2 border border-gray-300 rounded-md">
+                                                        <option value="feed">Feed</option>
+                                                        <option value="story" disabled>Story (em breve)</option>
+                                                    </select>
+                                                </div>
+                                                {/* Config Instagram */}
+                                                {acc.instagram_business_account && (
+                                                    <div className="space-y-2">
+                                                         <div className="flex items-center gap-2"><FaInstagram className="text-pink-600"/><span>Instagram</span></div>
+                                                         <select value={placements[clientId]?.instagram} onChange={(e) => handlePlacementChange(clientId, 'instagram', e.target.value)} className="w-full text-sm p-2 border border-gray-300 rounded-md">
+                                                            <option value="feed">Feed</option>
+                                                            <option value="story" disabled>Story (em breve)</option>
+                                                            <option value="reels" disabled>Reels (em breve)</option>
+                                                         </select>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                     )
+                                 })}
+
+                                 <div className="p-3 border rounded-md">
+                                    <label className="flex items-center space-x-2 cursor-pointer">
+                                        <input type="checkbox" checked={isScheduling} onChange={() => setIsScheduling(!isScheduling)} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                                        <span className="text-sm font-medium">Agendar publicação</span>
+                                    </label>
+                                    {isScheduling && (
+                                        <div className="mt-2 grid grid-cols-2 gap-4 animate-fade-in">
+                                            <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="p-2 border border-gray-300 rounded-md text-sm" />
+                                            <input type="time" value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} className="p-2 border border-gray-300 rounded-md text-sm" />
+                                            {scheduleWarning && <p className="col-span-2 text-xs text-red-600">{scheduleWarning}</p>}
+                                        </div>
+                                    )}
+                                 </div>
+                             </div>
                         </div>
                     </div>
                     <div className="p-4 bg-gray-100 border-t flex justify-between items-center">
@@ -391,8 +508,6 @@ const PostPublisher = ({ accounts, onClose, onPublishSuccess }) => {
     );
 };
 
-
-// --- (Rest of the components: CalendarHeader, CalendarGrid, etc. remain the same) ---
 const CalendarHeader = ({ currentDate, view, onDateChange, onViewChange, onToday }) => {
     const headerText = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
     return (

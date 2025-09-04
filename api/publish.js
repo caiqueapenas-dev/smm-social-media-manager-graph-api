@@ -1,106 +1,66 @@
 // api/publish.js
-// Esta é uma Serverless Function para a Vercel.
-// Lembre-se de adicionar suas variáveis de ambiente (MONGODB_URI, CLOUDINARY_*) nas configurações do projeto na Vercel.
-
+// Esta é uma Serverless Function para a Vercel, agora com lógica para upload.
+import { formidable } from 'formidable';
 import { v2 as cloudinary } from 'cloudinary';
-import { MongoClient } from 'mongodb';
 
-// Configuração do Cloudinary com as variáveis de ambiente
-cloudinary.config({ 
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME, 
-  api_key: process.env.CLOUDINARY_API_KEY, 
+// Configuração do Cloudinary (puxe das variáveis de ambiente na Vercel)
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Configuração do MongoDB
-const uri = process.env.MONGODB_URI;
-const client = new MongoClient(uri);
+// Helper para desativar o parser padrão do Next.js/Vercel
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
-// Cache da conexão com o banco para reutilização
-let db;
-
-async function connectToDb() {
-  if (db) return db;
-  await client.connect();
-  db = client.db('social-media-manager'); // Você pode nomear seu banco de dados aqui
-  return db;
-}
-
-// --- Handler Principal ---
+// Função principal que lida com a requisição
 export default async function handler(request, response) {
-    if (request.method !== 'POST') {
-        return response.status(405).json({ error: 'Method Not Allowed' });
+  if (request.method !== 'POST') {
+    return response.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  try {
+    const form = formidable({});
+    const [fields, files] = await form.parse(request);
+    
+    // Extrai os campos de texto do formulário
+    const text = fields.text?.[0];
+    const platformsToPost = JSON.parse(fields.platforms?.[0] || '[]');
+    const scheduledPublishTime = fields.scheduled_publish_time?.[0];
+
+    // Lógica de Upload para o Cloudinary
+    const uploadedImageUrls = await Promise.all(
+      (files.files || []).map(file => 
+        cloudinary.uploader.upload(file.filepath).then(result => result.secure_url)
+      )
+    );
+
+    if (uploadedImageUrls.length === 0 && !text) {
+        return response.status(400).json({ error: 'É necessário ter um texto ou pelo menos uma imagem.' });
     }
 
-    try {
-        const formData = await request.formData();
-        const files = formData.getAll('files');
-        const accountsToPost = JSON.parse(formData.get('accounts'));
-        const caption = formData.get('caption');
-        const publishMode = formData.get('publishMode'); // 'now' or 'schedule'
-        const scheduleTimestamp = formData.get('scheduleTimestamp'); // UNIX timestamp
+    // AQUI ENTRARÁ A LÓGICA PARA PUBLICAR NA META API
+    // Por enquanto, vamos retornar sucesso para testar o upload.
 
-        if (!files.length || !accountsToPost.length) {
-            return response.status(400).json({ error: 'É necessário fornecer imagens e selecionar ao menos uma conta.' });
-        }
+    console.log('Dados recebidos pelo backend:');
+    console.log('Texto:', text);
+    console.log('Plataformas:', platformsToPost);
+    console.log('Agendado para:', scheduledPublishTime);
+    console.log('URLs das imagens no Cloudinary:', uploadedImageUrls);
 
-        // 1. Fazer upload das imagens para o Cloudinary
-        const uploadPromises = files.map(async (file) => {
-            const arrayBuffer = await file.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            return new Promise((resolve, reject) => {
-                cloudinary.uploader.upload_stream({ folder: 'social-media-manager' }, (error, result) => {
-                    if (error) reject(error);
-                    else resolve(result);
-                }).end(buffer);
-            });
-        });
+    // Exemplo de resposta de sucesso
+    response.status(200).json({
+      status: 'sucesso',
+      message: 'Arquivos recebidos e enviados para o Cloudinary! Lógica de publicação da Meta a ser implementada.',
+      cloudinaryUrls: uploadedImageUrls,
+    });
 
-        const uploadedImages = await Promise.all(uploadPromises);
-        const imageUrls = uploadedImages.map(img => img.secure_url);
-
-        // 2. Publicar/Agendar para cada conta selecionada
-        const results = [];
-        for (const account of accountsToPost) {
-            // Lógica de publicação aqui (exemplo simplificado)
-            // A implementação real faria chamadas para a Graph API da Meta
-            // para criar contêineres e publicar.
-            
-            console.log(`-- Processando para: ${account.name} --`);
-            console.log(`Caption: ${caption}`);
-            console.log(`Imagens: ${imageUrls.join(', ')}`);
-            if (publishMode === 'schedule') {
-                console.log(`Agendado para: ${new Date(scheduleTimestamp * 1000).toLocaleString()}`);
-
-                // Se for Instagram, salvar no MongoDB
-                if (account.isInstagram) {
-                    const database = await connectToDb();
-                    const scheduledPostsCollection = database.collection('scheduled_posts');
-                    await scheduledPostsCollection.insertOne({
-                        accountId: account.id,
-                        accountName: account.name,
-                        platform: 'instagram',
-                        caption: caption,
-                        mediaUrls: imageUrls,
-                        scheduledAt: new Date(scheduleTimestamp * 1000),
-                        status: 'scheduled',
-                    });
-                     console.log('Post do Instagram salvo no MongoDB para agendamento.');
-                }
-            }
-             results.push({ accountName: account.name, status: 'success' });
-        }
-
-
-        response.status(200).json({ 
-            status: 'sucesso', 
-            message: 'Publicações processadas. A lógica de chamada da API da Meta ainda é um placeholder.',
-            results,
-        });
-
-    } catch (error) {
-        console.error('Erro no backend:', error);
-        response.status(500).json({ error: 'Ocorreu um erro no servidor.', details: error.message });
-    }
+  } catch (error) {
+    console.error('Erro no backend:', error);
+    response.status(500).json({ error: 'Ocorreu um erro no servidor.', details: error.message });
+  }
 }
-
