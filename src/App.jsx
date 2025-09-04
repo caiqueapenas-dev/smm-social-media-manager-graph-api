@@ -9,7 +9,7 @@ const BASE_URL = `https://graph.facebook.com/${API_VERSION}`;
 
 // --- Componente Principal App ---
 export default function App() {
-    const [accessToken, setAccessToken] = useState('EAASCiZBZBPmPgBPeBo07xLUb2zucpHMYtKVPNsvGLUSODm0bvwEGySBj5SIwOtDOYMDh4pemtZAust9G9ZB8jDOHKlJmzhmZCnOOxjVRwv3KUdAaUOBOMM1LZAj6WosqU39fIxPPZAlQmCQ4He484x4ZCbaQij2nN2TdMig39eYZBiMsYzE2Ao0cDraZBOLzZA2mhNdxPLk2POnnSvZAZAa4jZCzKj4flYcQciuCRH4QZCkLm2TDYU2kZCS6oAZDZD');
+    const [accessToken, setAccessToken] = useState('EAASCiZBZBPmPgBPdVdZAEyAQZCNXABrYk5UdHHRqZCKChvRyVOf6mJEISDl1v6ZCOw9Q4mKxXWEUbr4SEVS0O3kVhy6sVq9Md1BLYcIK5mMQAax4XiB4AA6uiKj2FuSbrDPkzG1KR1Y9FTdfI2fvxeQczTnMwDXKR1TiQJBrAZAp9MV0wMh3ItZBWAfGUnAXkdrxHlE2kDXOhPFsCZBx1');
     const [accounts, setAccounts] = useState([]);
     const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
     const [posts, setPosts] = useState([]);
