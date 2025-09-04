@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash } from 'react-icons/fa6';
+import { FaFacebook, FaInstagram, FaChevronLeft, FaChevronRight, FaClock, FaPlus, FaTimes, FaImage, FaTrash } from 'react-icons/fa';
+
+
 
 // --- Constantes da API ---
 const API_VERSION = 'v23.0';
